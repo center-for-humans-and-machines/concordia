@@ -1,4 +1,4 @@
-# MacOS metadata. 
+# MacOS metadata.
 .DS_Store
 
 # Byte-compiled Python code.
@@ -23,3 +23,5 @@ __pycache__/
 
 # Type checking
 .pytype
+
+request_logs.json

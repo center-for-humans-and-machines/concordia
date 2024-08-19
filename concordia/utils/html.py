@@ -106,22 +106,25 @@ class HTMLWriter:
 class PythonObjectToHTMLConverter:
   """Class to convert python objects to HTML."""
 
-  def __init__(self, python_object):
+  def __init__(self, python_object, limit_depth=10):
     self.python_object = python_object
+    self.limit_depth = limit_depth
     self.html_writer = HTMLWriter()
 
   def convert(self):
     self._convert_python_object(self.python_object)
     return self.html_writer.render()
 
-  def _convert_python_object(self, python_object):
+  def _convert_python_object(self, python_object, depth=0):
+    if depth > self.limit_depth:
+      return
     """Converts a python object to HTML."""
     if isinstance(python_object, str):
       self.html_writer.write(html.escape(python_object))
 
     elif isinstance(python_object, list):
-      for item in python_object:
-        self._convert_python_object(item)
+      for i, item in enumerate(tqdm(python_object, disable=depth > 1)):
+        self._convert_python_object(item, depth + 1)
         self.html_writer.write("<br />")
 
     elif isinstance(python_object, dict):
@@ -129,26 +132,30 @@ class PythonObjectToHTMLConverter:
 
       if "date" in python_object.keys():
         self.html_writer.write("<summary>")
-        self._convert_python_object(python_object["date"])
+        self._convert_python_object(python_object["date"], depth=depth + 1)
         if "Summary" in python_object.keys():
-          self._convert_python_object("  " + python_object["Summary"])
+          self._convert_python_object(
+              "  " + python_object["Summary"], depth=depth + 1
+          )
         self.html_writer.write("</summary>")
       elif "Summary" in python_object.keys():
         self.html_writer.write("<summary>")
-        self._convert_python_object("  " + python_object["Summary"])
+        self._convert_python_object(
+            "  " + python_object["Summary"], depth=depth + 1
+        )
         self.html_writer.write("</summary>")
       elif "Name" in python_object.keys():
         self.html_writer.write("<summary>")
-        self._convert_python_object(python_object["Name"])
+        self._convert_python_object(python_object["Name"], depth=depth + 1)
         self.html_writer.write("</summary>")
 
       for key, value in python_object.items():
         if key != "date" and key != "Summary":
           self.html_writer.write("<b><ul>")
-          self._convert_python_object(key)
+          self._convert_python_object(key, depth=depth + 1)
           self.html_writer.write("</b>")
           self.html_writer.write("<li>")
-          self._convert_python_object(value)
+          self._convert_python_object(value, depth=depth + 1)
           self.html_writer.write("</li></ul>")
 
       self.html_writer.write("</details>")
@@ -186,4 +193,3 @@ def combine_html_pages(
     )
 
   return html_code
-

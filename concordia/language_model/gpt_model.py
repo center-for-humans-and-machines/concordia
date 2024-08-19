@@ -15,12 +15,16 @@
 
 """Language Model that uses OpenAI's GPT models."""
 
+import json
 from collections.abc import Collection, Sequence
+from typing import Optional
+
+import openai
+from typing_extensions import override
+
 from concordia.language_model import language_model
 from concordia.utils import measurements as measurements_lib
 from concordia.utils import sampling
-import openai
-from typing_extensions import override
 
 _MAX_MULTIPLE_CHOICE_ATTEMPTS = 20
 
@@ -30,10 +34,11 @@ class GptLanguageModel(language_model.LanguageModel):
 
   def __init__(
       self,
-      api_key: str,
+      client: openai.OpenAI,
       model_name: str,
       measurements: measurements_lib.Measurements | None = None,
       channel: str = language_model.DEFAULT_STATS_CHANNEL,
+      request_logging_file: str = None,
   ):
     """Initializes the instance.
 
@@ -44,13 +49,15 @@ class GptLanguageModel(language_model.LanguageModel):
       measurements: The measurements object to log usage statistics to.
       channel: The channel to write the statistics to.
     """
-    self._api_key = api_key
     self._model_name = model_name
     self._measurements = measurements
     self._channel = channel
-    self._client = openai.OpenAI(
-        api_key=api_key,
-    )
+    self._client = client
+    self.request_logging_file = request_logging_file
+    if self.request_logging_file:
+      with open(self.request_logging_file, 'w'):
+        pass
+    self.stats = {'requests': 0, 'input_tokens': 0, 'completion_tokens': 0}
 
   @override
   def sample_text(
@@ -94,12 +101,55 @@ class GptLanguageModel(language_model.LanguageModel):
         seed=seed,
     )
 
+    self.stats['requests'] += 1
+    self.stats['input_tokens'] += response.usage.prompt_tokens
+    self.stats['completion_tokens'] += response.usage.completion_tokens
+
+    if self.request_logging_file:
+      write_msg = messages.copy()
+      write_msg.append({
+          'role': 'assistant (response)',
+          'content': response.choices[0].message.content,
+      })
+      with open(self.request_logging_file, 'a') as f:
+        f.write('\n')
+        f.write(json.dumps(write_msg, indent=4))
+
     if self._measurements is not None:
       self._measurements.publish_datum(
           self._channel,
           {'raw_text_length': len(response.choices[0].message.content)},
       )
     return response.choices[0].message.content
+
+  def compute_cost(
+      self,
+      input_token_cost: Optional[float] = None,
+      output_token_cost: Optional[float] = None,
+  ):
+    if input_token_cost is None:
+      assert output_token_cost is None
+      if 'gpt-4o' in self._model_name:
+        if 'mini' in self._model_name:
+          input_token_cost = 0.000165 / 1000
+          output_token_cost = 0.00066 / 1000
+        else:
+          input_token_cost = 0.005 / 1000
+          output_token_cost = 0.015 / 1000
+      elif 'gpt-35' in self._model_name:
+        input_token_cost = 0.0005 / 1000
+        output_token_cost = 0.0015 / 1000
+      else:
+        raise ValueError(
+            f'Unknown model name: {self._model_name}. Please provide'
+            ' input_token_cost and output_token_cost.'
+        )
+
+    total_cost = (
+        self.stats['input_tokens'] * input_token_cost
+        + self.stats['completion_tokens'] * output_token_cost
+    )
+    return total_cost
 
   @override
   def sample_choice(
