@@ -18,12 +18,11 @@ from collections.abc import Mapping
 import datetime
 import types
 
-from concordia.agents import basic_agent
 from concordia.agents import entity_agent_with_logging
 from concordia.associative_memory import associative_memory
 from concordia.associative_memory import formative_memories
 from concordia.clocks import game_clock
-from concordia.components.agent import v2 as agent_components
+from concordia.components import agent as agent_components
 from concordia.language_model import language_model
 from concordia.memory_bank import legacy_associative_memory
 from concordia.typing import entity_component
@@ -35,15 +34,17 @@ def _get_class_name(object_: object) -> str:
 
 
 def build_agent(
+    *,
     config: formative_memories.AgentConfig,
     model: language_model.LanguageModel,
     memory: associative_memory.AssociativeMemory,
     clock: game_clock.MultiIntervalClock,
     update_time_interval: datetime.timedelta,
     additional_components: Mapping[
-        entity_component.ComponentName, str
+        entity_component.ComponentName,
+        entity_component.ContextComponent,
     ] = types.MappingProxyType({}),
-) -> basic_agent.BasicAgent:
+) -> entity_agent_with_logging.EntityAgentWithLogging:
   """Build an agent.
 
   Args:
@@ -83,18 +84,19 @@ def build_agent(
       logging_channel=measurements.get_channel('Observation').on_next,
   )
   somatic_state_label = '\nSensations and feelings'
-  somatic_state = agent_components.somatic_state.SomaticStateWithoutPreAct(
+  somatic_state = agent_components.question_of_query_associated_memories.SomaticStateWithoutPreAct(
       model=model,
       clock_now=clock.now,
-      logging_channel=measurements.get_channel('SomaticState').on_next
+      logging_channel=measurements.get_channel('SomaticState').on_next,
+      pre_act_key=somatic_state_label,
   )
   observation_summary_label = '\nSummary of recent observations'
   observation_summary = agent_components.observation.ObservationSummary(
       model=model,
       clock_now=clock.now,
       timeframe_delta_from=datetime.timedelta(hours=4),
-      timeframe_delta_until=datetime.timedelta(hours=1),
-      components={_get_class_name(somatic_state): somatic_state_label},
+      timeframe_delta_until=datetime.timedelta(hours=0),
+      component_labels={_get_class_name(somatic_state): somatic_state_label},
       pre_act_key=observation_summary_label,
       logging_channel=measurements.get_channel('ObservationSummary').on_next,
   )
@@ -112,7 +114,7 @@ def build_agent(
   )
   self_perception_label = (
       f'\nQuestion: What kind of person is {agent_name}?\nAnswer')
-  self_perception = agent_components.self_perception.SelfPerception(
+  self_perception = agent_components.question_of_recent_memories.SelfPerception(
       model=model,
       pre_act_key=self_perception_label,
       logging_channel=measurements.get_channel('SelfPerception').on_next,
@@ -121,7 +123,7 @@ def build_agent(
       f'\nQuestion: What kind of situation is {agent_name} in '
       'right now?\nAnswer')
   situation_perception = (
-      agent_components.situation_perception.SituationPerception(
+      agent_components.question_of_recent_memories.SituationPerception(
           model=model,
           components={
               _get_class_name(observation): observation_label,
@@ -132,21 +134,24 @@ def build_agent(
           clock_now=clock.now,
           pre_act_key=situation_perception_label,
           logging_channel=measurements.get_channel(
-              'SituationPerception').on_next,
+              'SituationPerception'
+          ).on_next,
       )
   )
   person_by_situation_label = (
       f'\nQuestion: What would a person like {agent_name} do in '
       'a situation like this?\nAnswer')
-  person_by_situation = agent_components.person_by_situation.PersonBySituation(
-      model=model,
-      components={
-          _get_class_name(self_perception): self_perception_label,
-          _get_class_name(situation_perception): situation_perception_label,
-      },
-      clock_now=clock.now,
-      pre_act_key=person_by_situation_label,
-      logging_channel=measurements.get_channel('PersonBySituation').on_next,
+  person_by_situation = (
+      agent_components.question_of_recent_memories.PersonBySituation(
+          model=model,
+          components={
+              _get_class_name(self_perception): self_perception_label,
+              _get_class_name(situation_perception): situation_perception_label,
+          },
+          clock_now=clock.now,
+          pre_act_key=person_by_situation_label,
+          logging_channel=measurements.get_channel('PersonBySituation').on_next,
+      )
   )
 
   entity_components = (

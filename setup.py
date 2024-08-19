@@ -67,7 +67,6 @@ setuptools.setup(
     package_data={},
     python_requires='>=3.11',
     install_requires=(
-        # TODO: b/312199199 - remove some requirements.
         'absl-py',
         'boto3',
         'google-cloud-aiplatform',
@@ -77,12 +76,12 @@ setuptools.setup(
         'matplotlib',
         'mistralai',
         'numpy',
+        'ollama',
         'openai>=1.3.0',
         'pandas<=2.0.3',
         'python-dateutil',
         'reactivex',
         'retry',
-        'scipy',
         'termcolor',
         'transformers',
         'typing-extensions',

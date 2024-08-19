@@ -372,13 +372,13 @@ class AccountForAgencyOfOthers:
           call_to_action = ('Is the following possible action something that ' +
                             '{name} would do in this situation?\n' +
                             f'Possible action: {what_did_they_do}\n')
-          action_spec = agent_types.ActionSpec(
+          action_spec = agent_types.choice_action_spec(
               call_to_action=call_to_action,
-              output_type=agent_types.OutputType.CHOICE,
               options=['Yes', 'No'],
               tag='action',
           )
           would_they_do_it = self._player_by_name[player].act(action_spec)
+          action_spec.validate(would_they_do_it)
           if self._verbose:
             print(termcolor.colored(
                 tmp_chain_of_thought_per_player.view().text(), 'yellow'))

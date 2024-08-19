@@ -148,6 +148,10 @@ class PythonObjectToHTMLConverter:
         self.html_writer.write("<summary>")
         self._convert_python_object(python_object["Name"], depth=depth + 1)
         self.html_writer.write("</summary>")
+      elif "Key" in python_object.keys():
+        self.html_writer.write("<summary>")
+        self._convert_python_object(python_object["Key"])
+        self.html_writer.write("</summary>")
 
       for key, value in python_object.items():
         if key != "date" and key != "Summary":

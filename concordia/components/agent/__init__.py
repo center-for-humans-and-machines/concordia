@@ -12,25 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 """Library of components specifically for generative agents."""
 
-from concordia.components import constant
-from concordia.components import report_function
-from concordia.components import sequential
+from concordia.components.agent import action_spec_ignored
 from concordia.components.agent import all_similar_memories
-from concordia.components.agent import characteristic
-from concordia.components.agent import creative_reflection
-from concordia.components.agent import dialectical_reflection
-from concordia.components.agent import identity
+from concordia.components.agent import concat_act_component
+from concordia.components.agent import constant
+from concordia.components.agent import instructions
 from concordia.components.agent import justify_recent_voluntary_actions
+from concordia.components.agent import legacy_act_component
+from concordia.components.agent import memory_component
+from concordia.components.agent import no_op_context_processor
 from concordia.components.agent import observation
-from concordia.components.agent import options_perception
-from concordia.components.agent import person_by_situation
 from concordia.components.agent import plan
-from concordia.components.agent import reflection
+from concordia.components.agent import question_of_query_associated_memories
+from concordia.components.agent import question_of_recent_memories
 from concordia.components.agent import relationships
+from concordia.components.agent import report_function
 from concordia.components.agent import scheduled_hint
-from concordia.components.agent import self_perception
-from concordia.components.agent import situation_perception
-from concordia.components.agent import somatic_state
+from concordia.components.agent import simple_act_component

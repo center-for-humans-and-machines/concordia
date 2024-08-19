@@ -13,113 +13,111 @@
 # limitations under the License.
 
 """Agent components for planning."""
-from collections.abc import Sequence
+
+from collections.abc import Callable, Mapping
 import datetime
-from typing import Callable
-from concordia.associative_memory import associative_memory
+import types
+
+from concordia.components.agent import action_spec_ignored
+from concordia.components.agent import memory_component
+from concordia.components.agent import observation
 from concordia.document import interactive_document
 from concordia.language_model import language_model
-from concordia.typing import component
-import termcolor
+from concordia.memory_bank import legacy_associative_memory
+from concordia.typing import entity_component
+from concordia.typing import logging
+
+DEFAULT_PRE_ACT_KEY = 'Plan'
+_ASSOCIATIVE_RETRIEVAL = legacy_associative_memory.RetrieveAssociative()
 
 
-class SimPlan(component.Component):
+class Plan(action_spec_ignored.ActionSpecIgnored):
   """Component representing the agent's plan."""
 
   def __init__(
       self,
       model: language_model.LanguageModel,
-      memory: associative_memory.AssociativeMemory,
-      agent_name: str,
-      components: list[component.Component],
-      clock_now: Callable[[], datetime.datetime],
-      name: str = 'plan',
-      goal: component.Component | None = None,
-      num_memories_to_retrieve: int = 5,
+      observation_component_name: str,
+      memory_component_name: str = (
+          memory_component.DEFAULT_MEMORY_COMPONENT_NAME
+      ),
+      components: Mapping[
+          entity_component.ComponentName, str
+      ] = types.MappingProxyType({}),
+      clock_now: Callable[[], datetime.datetime] | None = None,
+      goal_component_name: str | None = None,
+      num_memories_to_retrieve: int = 10,
       horizon: str = 'the rest of the day',
-      verbose: bool = False,
-      log_color='green',
+      pre_act_key: str = DEFAULT_PRE_ACT_KEY,
+      logging_channel: logging.LoggingChannel = logging.NoOpLoggingChannel,
   ):
     """Initialize a component to represent the agent's plan.
 
     Args:
       model: a language model
-      memory: an associative memory
-      agent_name: the name of the agent
-      components: components to build the context of planning
+      observation_component_name: The name of the observation component from
+        which to retrieve obervations.
+      memory_component_name: The name of the memory component from which to
+        retrieve memories
+      components: components to build the context of planning. This is a mapping
+        of the component name to a label to use in the prompt.
       clock_now: time callback to use for the state.
-      name: name of the component
-      goal: a component to represent the goal of planning
+      goal_component_name: index into `components` to use to represent the goal
+        of planning
       num_memories_to_retrieve: how many memories to retrieve as conditioning
         for the planning chain of thought
       horizon: string describing how long the plan should last
-      verbose: whether or not to print intermediate reasoning steps
-      log_color: color for debug logging
+      pre_act_key: Prefix to add to the output of the component when called
+        in `pre_act`.
+      logging_channel: channel to use for debug logging.
     """
+    super().__init__(pre_act_key)
     self._model = model
-    self._memory = memory
-    self._state = ''
-    self._agent_name = agent_name
-    self._log_color = log_color
-    self._components = components
-    self._name = name
-    self._num_memories_to_retrieve = num_memories_to_retrieve
-    self._goal_component = goal
-    self._horizon = horizon
+    self._observation_component_name = observation_component_name
+    self._memory_component_name = memory_component_name
+    self._components = dict(components)
     self._clock_now = clock_now
-    self._last_update = datetime.datetime.min
+    self._goal_component_name = goal_component_name
+    self._num_memories_to_retrieve = num_memories_to_retrieve
+    self._horizon = horizon
 
-    self._latest_memories = ''
-    self._last_observation = []
     self._current_plan = ''
-    self._history = []
 
-    self._verbose = verbose
+    self._logging_channel = logging_channel
 
-  def name(self) -> str:
-    return self._name
+  def _make_pre_act_value(self) -> str:
+    agent_name = self.get_entity().name
+    observation_component = self.get_entity().get_component(
+        self._observation_component_name,
+        type_=observation.Observation)
+    latest_observations = observation_component.get_pre_act_value()
 
-  def state(self):
-    return self._state
+    memory = self.get_entity().get_component(
+        self._memory_component_name,
+        type_=memory_component.MemoryComponent)
 
-  def get_last_log(self):
-    if self._history:
-      return self._history[-1].copy()
+    memories = [mem.text for mem in memory.retrieve(
+        query=latest_observations,
+        scoring_fn=_ASSOCIATIVE_RETRIEVAL,
+        limit=self._num_memories_to_retrieve)]
 
-  def _log(self, entry: str):
-    print(termcolor.colored(entry, self._log_color), end='')
+    if self._goal_component_name:
+      goal_component = self.get_entity().get_component(
+          self._goal_component_name,
+          type_=action_spec_ignored.ActionSpecIgnored)
+      memories = memories + [mem.text for mem in memory.retrieve(
+          query=goal_component.get_pre_act_value(),
+          scoring_fn=_ASSOCIATIVE_RETRIEVAL,
+          limit=self._num_memories_to_retrieve)]
+    else:
+      goal_component = None
 
-  def observe(self, observation: str):
-    self._last_observation.append(observation)
-
-  def get_components(self) -> Sequence[component.Component]:
-    return self._components
-
-  def update(self):
-    if self._last_update == self._clock_now():
-      return
-    self._last_update = self._clock_now()
-
-    observation = '\n'.join(self._last_observation)
-    self._last_observation = []
-    memories = self._memory.retrieve_associative(
-        observation,
-        k=self._num_memories_to_retrieve,
-        use_recency=True,
-        add_time=True,
-    )
-    if self._goal_component:
-      memories = memories + self._memory.retrieve_associative(
-          self._goal_component.state(),
-          k=self._num_memories_to_retrieve,
-          use_recency=True,
-          add_time=True,
-      )
     memories = '\n'.join(memories)
 
-    components = '\n'.join([
-        f"{self._agent_name}'s {construct.name()}:\n{construct.state()}"
-        for construct in self._components
+    component_states = '\n'.join([
+        f"{agent_name}'s"
+        f' {prefix}:\n{self.get_named_component_pre_act_value(key)}'
+        for key, prefix in self._components.items()
     ])
 
     in_context_example = (
@@ -127,44 +125,41 @@ class SimPlan(component.Component):
     )
 
     prompt = interactive_document.InteractiveDocument(self._model)
-    prompt.statement(f'{components}\n')
+    prompt.statement(f'{component_states}\n')
     prompt.statement(f'Relevant memories:\n{memories}')
-    if self._goal_component:
-      prompt.statement(f'Current goal: {self._goal_component.state()}.')
+    if goal_component is not None:
+      prompt.statement(
+          f'Current goal: {goal_component.get_pre_act_value()}.')  # pylint: disable=undefined-variable
     prompt.statement(f'Current plan: {self._current_plan}')
-    prompt.statement(f'Current situation: {observation}')
+    prompt.statement(f'Current situation: {latest_observations}')
 
     time_now = self._clock_now().strftime('[%d %b %Y %H:%M:%S]')
     prompt.statement(f'The current time is: {time_now}\n')
     should_replan = prompt.yes_no_question(
-        f'Given the above, should {self._agent_name} change their current '
+        f'Given the above, should {agent_name} change their current '
         'plan? '
     )
 
-    if should_replan or not self._state:
+    if should_replan or not self._current_plan:
+      # Replan on the first turn and whenever the LLM suggests the agent should.
       goal_mention = '.'
-      if self._goal_component:
+      if self._goal_component_name:
         goal_mention = ', keep in mind the goal.'
       self._current_plan = prompt.open_question(
-          f"Write {self._agent_name}'s plan for {self._horizon}. Please,"
-          ' provide a detailed schedule'
+          f"Write {agent_name}'s plan for {self._horizon}."
+          ' Provide a detailed schedule'
           + goal_mention
           + in_context_example,
           max_tokens=1200,
           terminators=(),
       )
 
-    self._state = self._current_plan
+    result = self._current_plan
 
-    if self._verbose:
-      self._log('\n' + prompt.view().text() + '\n')
-
-    update_log = {
-        'Summary': (
-            f'detailed plan of {self._agent_name} '
-            + f'for {self._horizon}'
-        ),
-        'State': self._state,
+    self._logging_channel({
+        'Key': self.get_pre_act_key(),
+        'Value': result,
         'Chain of thought': prompt.view().text().splitlines(),
-    }
-    self._history.append(update_log)
+    })
+
+    return result

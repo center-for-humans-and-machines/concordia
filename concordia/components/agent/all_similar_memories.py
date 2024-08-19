@@ -15,96 +15,87 @@
 """Return all memories similar to a prompt and filter them for relevance.
 """
 
-from collections.abc import Callable, Sequence
-import datetime
-from concordia.associative_memory import associative_memory
+from collections.abc import Mapping
+import types
+
+from concordia.components.agent import action_spec_ignored
+from concordia.components.agent import memory_component
 from concordia.document import interactive_document
 from concordia.language_model import language_model
-from concordia.typing import component
-import termcolor
+from concordia.memory_bank import legacy_associative_memory
+from concordia.typing import entity_component
+from concordia.typing import logging
 
 
-class AllSimilarMemories(component.Component):
+_ASSOCIATIVE_RETRIEVAL = legacy_associative_memory.RetrieveAssociative()
+
+
+class AllSimilarMemories(action_spec_ignored.ActionSpecIgnored):
   """Get all memories similar to the state of the components and filter them."""
 
   def __init__(
       self,
-      name: str,
       model: language_model.LanguageModel,
-      memory: associative_memory.AssociativeMemory,
-      agent_name: str,
-      components: Sequence[component.Component] | None = None,
-      clock_now: Callable[[], datetime.datetime] | None = None,
+      memory_component_name: str = (
+          memory_component.DEFAULT_MEMORY_COMPONENT_NAME
+      ),
+      components: Mapping[
+          entity_component.ComponentName, str
+      ] = types.MappingProxyType({}),
       num_memories_to_retrieve: int = 25,
-      verbose: bool = False,
+      pre_act_key: str = 'Relevant memories',
+      logging_channel: logging.LoggingChannel = logging.NoOpLoggingChannel,
   ):
     """Initialize a component to report relevant memories (similar to a prompt).
 
     Args:
-      name: The name of the component.
       model: The language model to use.
-      memory: The memory to use.
-      agent_name: The name of the agent.
-      components: The components to condition the answer on.
-      clock_now: time callback to use for the state.
+      memory_component_name: The name of the memory component from which to
+        retrieve related memories.
+      components: The components to condition the answer on. This is a mapping
+        of the component name to a label to use in the prompt.
       num_memories_to_retrieve: The number of memories to retrieve.
-      verbose: Whether to print the state of the component.
+      pre_act_key: Prefix to add to the output of the component when called
+        in `pre_act`.
+      logging_channel: The channel to log debug information to.
     """
-
-    self._verbose = verbose
+    super().__init__(pre_act_key)
     self._model = model
-    self._memory = memory
+    self._memory_component_name = memory_component_name
     self._state = ''
-    self._components = components or []
-    self._agent_name = agent_name
-    self._clock_now = clock_now
+    self._components = dict(components)
     self._num_memories_to_retrieve = num_memories_to_retrieve
-    self._name = name
-    self._last_update = datetime.datetime.min
-    self._history = []
+    self._logging_channel = logging_channel
 
-  def name(self) -> str:
-    return self._name
-
-  def state(self) -> str:
-    return self._state
-
-  def get_last_log(self):
-    if self._history:
-      return self._history[-1].copy()
-
-  def get_components(self) -> Sequence[component.Component]:
-    return self._components
-
-  def update(self) -> None:
-    if self._clock_now() == self._last_update:
-      return
-    self._last_update = self._clock_now()
-
+  def _make_pre_act_value(self) -> str:
+    agent_name = self.get_entity().name
     prompt = interactive_document.InteractiveDocument(self._model)
 
     component_states = '\n'.join([
-        f"{self._agent_name}'s {comp.name()}:\n{comp.state()}"
-        for comp in self._components
+        f"{agent_name}'s"
+        f' {prefix}:\n{self.get_named_component_pre_act_value(key)}'
+        for key, prefix in self._components.items()
     ])
     prompt.statement(f'Statements:\n{component_states}\n')
     prompt_summary = prompt.open_question(
         'Summarize the statements above.', max_tokens=750
     )
 
-    query = f'{self._agent_name}, {prompt_summary}'
-    if self._clock_now is not None:
-      query = f'[{self._clock_now()}] {query}'
+    memory = self.get_entity().get_component(
+        self._memory_component_name,
+        type_=memory_component.MemoryComponent)
 
+    query = f'{agent_name}, {prompt_summary}'
     mems = '\n'.join(
-        self._memory.retrieve_associative(
-            query, self._num_memories_to_retrieve, add_time=True
-        )
+        [mem.text for mem in memory.retrieve(
+            query=query,
+            scoring_fn=_ASSOCIATIVE_RETRIEVAL,
+            limit=self._num_memories_to_retrieve)]
     )
 
     question = (
         'Select the subset of the following set of statements that is most '
-        f'important for {self._agent_name} to consider right now. Whenever two '
+        f'important for {agent_name} to consider right now. Whenever two '
         'or more statements are not mutally consistent with each other '
         'select whichever statement is more recent. Repeat all the '
         'selected statements verbatim. Do not summarize. Include timestamps. '
@@ -112,27 +103,19 @@ class AllSimilarMemories(component.Component):
         'recent events. As long as they are not inconsistent, revent events '
         'are usually important to consider.'
     )
-    if self._clock_now is not None:
-      question = f'The current date/time is: {self._clock_now()}.\n{question}'
     new_prompt = prompt.new()
-    self._state = new_prompt.open_question(
+    result = new_prompt.open_question(
         f'{question}\nStatements:\n{mems}',
         max_tokens=2000,
-        terminators=(),
+        terminators=('\n\n',),
     )
 
-    if self._verbose:
-      print(termcolor.colored(prompt.view().text(), 'green'), end='')
-      print(termcolor.colored(f'Query: {query}\n', 'green'), end='')
-      print(termcolor.colored(new_prompt.view().text(), 'green'), end='')
-      print(termcolor.colored(self._state, 'green'), end='')
-
-    update_log = {
-        'date': self._clock_now(),
-        'Summary': self._name,
-        'State': self._state,
+    self._logging_channel({
+        'Key': self.get_pre_act_key(),
+        'Value': result,
         'Initial chain of thought': prompt.view().text().splitlines(),
         'Query': f'{query}',
         'Final chain of thought': new_prompt.view().text().splitlines(),
-    }
-    self._history.append(update_log)
+    })
+
+    return result

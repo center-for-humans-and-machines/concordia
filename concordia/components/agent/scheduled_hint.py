@@ -13,68 +13,60 @@
 # limitations under the License.
 
 """Agent component for scheduled hinting."""
+from collections.abc import Callable, Mapping, Sequence
 import datetime
-from typing import Callable, Sequence
+import types
 
+from concordia.components.agent import action_spec_ignored
 from concordia.document import interactive_document
 from concordia.language_model import language_model
-from concordia.typing import component
-import termcolor
+from concordia.typing import entity_component
+from concordia.typing import logging
+
+DEFAULT_PRE_ACT_KEY = '\nHint'
 
 
-class ScheduledHint(component.Component):
+class ScheduledHint(action_spec_ignored.ActionSpecIgnored):
   """Deliver a specific hints to an agent at specific times."""
 
   def __init__(
       self,
-      name: str,
       model: language_model.LanguageModel,
-      agent_name: str,
-      components: Sequence[component.Component] | None = None,
+      components: Mapping[
+          entity_component.ComponentName, str
+      ] = types.MappingProxyType({}),
       clock_now: Callable[[], datetime.datetime] | None = None,
       hints: Sequence[Callable[[str, datetime.datetime], str]] | None = None,
-      verbose: bool = False,
+      pre_act_key: str = DEFAULT_PRE_ACT_KEY,
+      logging_channel: logging.LoggingChannel = logging.NoOpLoggingChannel,
   ):
     """Initializes the PersonBySituation component.
 
     Args:
-      name: The name of the component.
       model: The language model to use.
-      agent_name: The name of the agent.
       components: The components to condition the answer on.
       clock_now: time callback to use for the state.
       hints: Sequence of possible hints to apply on each step. Each checks a
         condition based on the incoming chain of thought and either outputs a
         string or not.
-      verbose: Whether to print the state of the component.
+      pre_act_key: Prefix to add to the output of the component when called
+        in `pre_act`.
+      logging_channel: The channel to log debug information to.
     """
-
-    self._verbose = verbose
+    super().__init__(pre_act_key)
     self._model = model
-    self._state = ''
-    self._components = components or []
-    self._agent_name = agent_name
+    self._components = dict(components)
     self._clock_now = clock_now
     self._hints = hints
-    self._name = name
-    self._history = []
+    self._logging_channel = logging_channel
 
-  def name(self) -> str:
-    return self._name
-
-  def state(self) -> str:
-    return self._state
-
-  def get_last_log(self):
-    if self._history:
-      return self._history[-1].copy()
-
-  def update(self) -> None:
+  def _make_pre_act_value(self) -> str:
+    agent_name = self.get_entity().name
     chain_of_thought = interactive_document.InteractiveDocument(self._model)
     component_states = '\n'.join([
-        f"{self._agent_name}'s "
-        + (construct.name() + ':\n' + construct.state())
-        for construct in self._components
+        f"{agent_name}'s"
+        f' {prefix}:\n{self.get_named_component_pre_act_value(key)}'
+        for key, prefix in self._components.items()
     ])
     chain_of_thought.statement(
         f'Current time: {self._clock_now()}\n' + component_states)
@@ -86,16 +78,12 @@ class ScheduledHint(component.Component):
         hint_outputs.append(hint_output)
 
     hint_outputs_str = ' '.join(hint_outputs)
-    self._state = f'{hint_outputs_str}'
+    result = f'{hint_outputs_str}'
 
-    self._last_chain = chain_of_thought
-    if self._verbose:
-      print(termcolor.colored(self._last_chain.view().text(), 'green'), end='')
+    self._logging_channel({
+        'Key': self.get_pre_act_key(),
+        'Value': result,
+        'Chain of thought': chain_of_thought.view().text().splitlines(),
+    })
 
-    update_log = {
-        'date': self._clock_now(),
-        'Summary': self._name,
-        'State': self._state,
-        'Chain of thought': self._last_chain.view().text().splitlines(),
-    }
-    self._history.append(update_log)
+    return result

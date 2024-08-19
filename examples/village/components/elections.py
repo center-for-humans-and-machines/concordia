@@ -149,13 +149,13 @@ class Elections(component.Component):
             f'Current activity: {event_statement}.\nGiven the above, who whould'
             f' {active_voter} vote for?'
         )
-        action_spec = agent.ActionSpec(
+        action_spec = agent.choice_action_spec(
             call_to_action=question,
-            output_type=agent.OutputType.CHOICE,
             options=self._candidates,
             tag='vote',
         )
         vote = self._voter_by_name[active_voter].act(action_spec)
+        action_spec.validate(vote)
 
         self._vote_count[vote] += 1
         self._citizens_who_already_voted.add(active_voter)

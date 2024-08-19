@@ -14,20 +14,16 @@
 
 """Agent thinks about how to justify their recent voluntary actions."""
 
-from collections.abc import Callable, Mapping, Sequence
 import datetime
-import types
+from typing import Callable
+from typing import Sequence
 
-from concordia.components.agent.v2 import action_spec_ignored
-from concordia.components.agent.v2 import memory_component
+from concordia.associative_memory import associative_memory
 from concordia.document import interactive_document
 from concordia.language_model import language_model
-from concordia.memory_bank import legacy_associative_memory
-from concordia.typing import entity_component
-from concordia.typing import logging
+from concordia.typing import component
+import termcolor
 
-
-DEFAULT_PRE_ACT_KEY = 'Self justification'
 
 DEFAULT_AUDIENCES = (
     'themself',
@@ -58,70 +54,81 @@ def concat_interactive_documents(
   return copied_doc
 
 
-class JustifyRecentVoluntaryActions(action_spec_ignored.ActionSpecIgnored):
+class JustifyRecentVoluntaryActions(component.Component):
   """Make new thoughts concerning justification of recent voluntary actions."""
 
   def __init__(
       self,
+      name: str,
       model: language_model.LanguageModel,
-      memory_component_name: str = (
-          memory_component.DEFAULT_MEMORY_COMPONENT_NAME
-      ),
-      components: Mapping[
-          entity_component.ComponentName, str
-      ] = types.MappingProxyType({}),
+      memory: associative_memory.AssociativeMemory,
+      agent_name: str,
+      components: list[component.Component],
       audiences: Sequence[str] = DEFAULT_AUDIENCES,
       clock_now: Callable[[], datetime.datetime] | None = None,
       num_memories_to_retrieve: int = 100,
-      pre_act_key: str = DEFAULT_PRE_ACT_KEY,
-      logging_channel: logging.LoggingChannel = logging.NoOpLoggingChannel,
+      verbose: bool = False,
   ):
     """Initializes the JustifyRecentVoluntaryActions component.
 
     Args:
+      name: The name of the component.
       model: The language model to use.
-      memory_component_name: The name of the memory component from which to
-        retrieve recent memories.
-      components: The components to condition the answer on. This is a mapping
-        of the component name to a label to use in the prompt.
-      audiences: Intended audiences for the justification.
-      clock_now: Function that returns the current time.
+      memory: The memory to use.
+      agent_name: The name of the agent.
+      components: 
+      audiences:
+      clock_now: time callback to use for the state.
       num_memories_to_retrieve: The number of memories to retrieve.
-      pre_act_key: Prefix to add to the output of the component when called
-        in `pre_act`.
-      logging_channel: The channel to use for debug logging.
+      verbose: Whether to print the state of the component.
     """
-    super().__init__(pre_act_key)
+    self._verbose = verbose
     self._model = model
-    self._memory_component_name = memory_component_name
-    self._components = dict(components)
+    self._memory = memory
+    self._state = ''
+    self._agent_name = agent_name
     self._clock_now = clock_now
     self._num_memories_to_retrieve = num_memories_to_retrieve
+    self._components = components
     self._audiences = audiences
 
-    self._logging_channel = logging_channel
+    self._name = name
+    self._history = []
+    self._last_update = datetime.datetime.min
 
-  def _make_pre_act_value(self) -> str:
-    agent_name = self.get_entity().name
+  def name(self) -> str:
+    return self._name
+
+  def state(self) -> str:
+    return self._state
+
+  def get_last_log(self):
+    if self._history:
+      return self._history[-1].copy()
+
+  def get_components(self) -> Sequence[component.Component]:
+    return self._components
+
+  def update(self) -> None:
+    if self._clock_now() == self._last_update:
+      return
+    self._last_update = self._clock_now()
 
     # First determine what voluntary actions the agent recently took.
     what_they_did_chain_of_thought = interactive_document.InteractiveDocument(
         self._model)
-    memory = self.get_entity().get_component(
-        self._memory_component_name,
-        type_=memory_component.MemoryComponent)
-    recency_scorer = legacy_associative_memory.RetrieveRecent(add_time=True)
     mems = '\n'.join(
-        [mem.text for mem in memory.retrieve(
-            scoring_fn=recency_scorer, limit=self._num_memories_to_retrieve)]
+        self._memory.retrieve_recent(
+            self._num_memories_to_retrieve, add_time=True
+        )
     )
     what_they_did_chain_of_thought.statement(
-        f'Memories of {agent_name}:\n{mems}')
+        f'Memories of {self._agent_name}:\n{mems}')
     what_they_did_chain_of_thought.statement(
         f'The current time: {self._clock_now()}.')
     what_they_did = what_they_did_chain_of_thought.open_question(
         question=(
-            f"Summarize the gist of {agent_name}'s most recent "
+            f"Summarize the gist of {self._agent_name}'s most recent "
             + 'voluntary actions. Do not speculate about their motives. '
             + 'Just straightforwardly describe what they did most recently.'
         ),
@@ -130,7 +137,7 @@ class JustifyRecentVoluntaryActions(action_spec_ignored.ActionSpecIgnored):
     )
     what_effect_it_had = what_they_did_chain_of_thought.open_question(
         question=(
-            f"If any, what consequences did {agent_name}'s "
+            f"If any, what consequences did {self._agent_name}'s "
             + 'most recent voluntary actions have? Only consider effects '
             + f'that have already occurred (before {self._clock_now()}).'
         ),
@@ -141,23 +148,23 @@ class JustifyRecentVoluntaryActions(action_spec_ignored.ActionSpecIgnored):
     justification_chain_of_thought = interactive_document.InteractiveDocument(
         self._model)
     component_states = '\n'.join([
-        f"{agent_name}'s"
-        f' {prefix}:\n{self.get_named_component_pre_act_value(key)}'
-        for key, prefix in self._components.items()
+        f"{self._agent_name}'s "
+        + (comp.name() + ':\n' + comp.state())
+        for comp in self._components
     ])
     justification_chain_of_thought.statement(component_states)
     justification_chain_of_thought.statement(
         f'The current time: {self._clock_now()}.')
     justification_chain_of_thought.statement(
-        f'{agent_name}\'s latest voluntary action: {what_they_did}')
+        f'{self._agent_name}\'s latest voluntary action: {what_they_did}')
     justification_chain_of_thought.statement(
-        f'The effect of {agent_name}\'s voluntary action (if any): ' +
+        f'The effect of {self._agent_name}\'s voluntary action (if any): ' +
         f'{what_effect_it_had}')
     audiences_str = ', '.join(self._audiences[:-1])
     audiences_str += f', and {self._audiences[-1]}'
     _ = justification_chain_of_thought.open_question(
         question=(
-            f'How would {agent_name} justify their actions to all the '
+            f'How would {self._agent_name} justify their actions to all the '
             + f'following audiences: {audiences_str}?'
         ),
         max_tokens=2000,
@@ -165,27 +172,30 @@ class JustifyRecentVoluntaryActions(action_spec_ignored.ActionSpecIgnored):
     )
     most_salient_justification = justification_chain_of_thought.open_question(
         question=(
-            f"Given {agent_name}'s current situation, which "
+            f"Given {self._agent_name}'s current situation, which "
             + 'justification is most salient to them? Describe the action '
             + 'itself, as well as some reasons why, and to whom, it can be '
             + 'justified. Feel free to blend justifications crafted for '
             + 'different audiences.'
         ),
-        answer_prefix=f'{agent_name} ',
+        answer_prefix=f'{self._agent_name} ',
         max_tokens=1000,
         terminators=(),
     )
-    result = (
-        f'[thought] {agent_name} {most_salient_justification}')
-    memory.add(result, metadata={})
+    salient_justification = (
+        f'[thought] {self._agent_name} {most_salient_justification}')
+    self._state = salient_justification
+    self._memory.add(salient_justification)
 
-    display_chain = concat_interactive_documents(
+    self._last_chain = concat_interactive_documents(
         what_they_did_chain_of_thought, justification_chain_of_thought)
+    if self._verbose:
+      print(termcolor.colored(self._last_chain.view().text(), 'green'), end='')
 
-    self._logging_channel({
-        'Key': self.get_pre_act_key(),
-        'Value': result,
-        'Chain of thought': display_chain.view().text().splitlines(),
-    })
-
-    return result
+    update_log = {
+        'date': self._clock_now(),
+        'Summary': self._name,
+        'State': self._state,
+        'Chain of thought': self._last_chain.view().text().splitlines(),
+    }
+    self._history.append(update_log)

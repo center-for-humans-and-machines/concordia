@@ -12,105 +12,111 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""A simple component to receive observations."""
 
-"""Agent components for representing observation stream."""
-
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping
 import datetime
+import types
 
-from concordia.associative_memory import associative_memory
+from concordia.components.agent import action_spec_ignored
+from concordia.components.agent import memory_component
 from concordia.document import interactive_document
 from concordia.language_model import language_model
-from concordia.typing import component
-import termcolor
+from concordia.memory_bank import legacy_associative_memory
+from concordia.typing import logging
+
+DEFAULT_OBSERVATION_PRE_ACT_KEY = 'Observation'
+DEFAULT_OBSERVATION_SUMMARY_PRE_ACT_KEY = 'Summary of recent observations'
 
 
-class Observation(component.Component):
-  """Component that displays and adds observations to memory."""
+class Observation(action_spec_ignored.ActionSpecIgnored):
+  """A simple component to receive observations."""
 
   def __init__(
       self,
-      agent_name: str,
       clock_now: Callable[[], datetime.datetime],
       timeframe: datetime.timedelta,
-      memory: associative_memory.AssociativeMemory,
-      component_name: str = 'Current observation',
-      verbose: bool = False,
-      log_colour='green',
+      memory_component_name: str = (
+          memory_component.DEFAULT_MEMORY_COMPONENT_NAME),
+      pre_act_key: str = DEFAULT_OBSERVATION_PRE_ACT_KEY,
+      logging_channel: logging.LoggingChannel = logging.NoOpLoggingChannel,
   ):
-    """Initializes the component.
+    """Initializes the observation component.
 
     Args:
-      agent_name: Name of the agent.
+
       clock_now: Function that returns the current time.
       timeframe: Delta from current moment to display observations from, e.g. 1h
         would display all observations made in the last hour.
-      memory: Associative memory to add and retrieve observations.
-      component_name: Name of this component.
-      verbose: Whether to print the observations.
-      log_colour: Colour to print the log.
+      memory_component_name: Name of the memory component to add observations to
+        in `pre_observe` and to retrieve observations from in `pre_act`.
+      pre_act_key: Prefix to add to the output of the component when called
+        in `pre_act`.
+      logging_channel: The channel to use for debug logging.
     """
-    self._agent_name = agent_name
-    self._log_colour = log_colour
-    self._name = component_name
-    self._memory = memory
-    self._timeframe = timeframe
+    super().__init__(pre_act_key)
     self._clock_now = clock_now
+    self._timeframe = timeframe
+    self._memory_component_name = memory_component_name
 
-    self._verbose = verbose
+    self._logging_channel = logging_channel
 
-  def name(self) -> str:
-    return self._name
+  def pre_observe(
+      self,
+      observation: str,
+  ) -> str:
+    memory = self.get_entity().get_component(
+        self._memory_component_name,
+        type_=memory_component.MemoryComponent)
+    memory.add(
+        f'[observation] {observation}',
+        metadata={'tags': ['observation']},
+    )
+    return ''
 
-  def state(self):
-    mems = self._memory.retrieve_time_interval(
-        self._clock_now() - self._timeframe, self._clock_now(), add_time=True
+  def _make_pre_act_value(self) -> str:
+    """Returns the latest observations to preact."""
+    memory = self.get_entity().get_component(
+        self._memory_component_name,
+        type_=memory_component.MemoryComponent)
+    interval_scorer = legacy_associative_memory.RetrieveTimeInterval(
+        time_from=self._clock_now() - self._timeframe,
+        time_until=self._clock_now(),
+        add_time=True,
     )
     # removes memories that are not observations
-    mems = [mem for mem in mems if '[observation]' in mem]
+    mems = memory.retrieve(scoring_fn=interval_scorer)
+    # Remove memories that are not observations.
+    mems = [mem.text for mem in mems if '[observation]' in mem.text]
+    result = '\n'.join(mems) + '\n'
+    self._logging_channel(
+        {'Key': self.get_pre_act_key(), 'Value': result.splitlines()})
 
-    if self._verbose:
-      self._log('\n'.join(mems) + '\n')
-    return '\n'.join(mems) + '\n'
-
-  def get_last_log(self):
-    return {
-        'Summary': 'observation',
-        'state': self.state().splitlines(),
-    }
-
-  def _log(self, entry: str):
-    print(termcolor.colored(entry, self._log_colour), end='')
-
-  def observe(self, observation: str):
-    self._memory.add(
-        f'[observation] {observation.strip()}',
-        tags=['observation'],
-    )
+    return result
 
 
-class ObservationSummary(component.Component):
-  """Component that summarises observations from a segment of time."""
+class ObservationSummary(action_spec_ignored.ActionSpecIgnored):
+  """Component that summarizes observations from a segment of time."""
 
   def __init__(
       self,
-      agent_name: str,
+      *,
       model: language_model.LanguageModel,
       clock_now: Callable[[], datetime.datetime],
       timeframe_delta_from: datetime.timedelta,
       timeframe_delta_until: datetime.timedelta,
-      memory: associative_memory.AssociativeMemory,
-      components: list[component.Component],
-      component_name: str = 'Summary of observations',
+      memory_component_name: str = (
+          memory_component.DEFAULT_MEMORY_COMPONENT_NAME
+      ),
+      component_labels: Mapping[str, str] = types.MappingProxyType({}),
       prompt: str | None = None,
       display_timeframe: bool = True,
-      verbose: bool = False,
-      log_colour='green',
+      pre_act_key: str = DEFAULT_OBSERVATION_SUMMARY_PRE_ACT_KEY,
+      logging_channel: logging.LoggingChannel = logging.NoOpLoggingChannel,
   ):
     """Initializes the component.
 
     Args:
-      agent_name: Name of the agent.
       model: Language model to summarise the observations.
       clock_now: Function that returns the current time.
       timeframe_delta_from: delta from the current moment to the begnning of the
@@ -118,78 +124,65 @@ class ObservationSummary(component.Component):
         happened from 4h ago until clock_now minus timeframe_delta_until.
       timeframe_delta_until: delta from the current moment to the end of the
         segment to summarise.
-      memory: Associative memory retrieve observations from.
-      components: List of components to summarise.
-      component_name: Name of the component.
+      memory_component_name: Name of the memory component from which to retrieve
+        observations to summarize.
+      component_labels: Mapping from component name to the label to give it.
       prompt: Language prompt for summarising memories and components.
       display_timeframe: Whether to display the time interval as text.
-      verbose: Whether to print the observations.
-      log_colour: Colour to print the log.
+      pre_act_key: Prefix to add to the output of the component when called
+        in `pre_act`.
+      logging_channel: The channel to use for debug logging.
     """
+    super().__init__(pre_act_key)
     self._model = model
-    self._agent_name = agent_name
-    self._log_colour = log_colour
-    self._name = component_name
-    self._memory = memory
+    self._clock_now = clock_now
     self._timeframe_delta_from = timeframe_delta_from
     self._timeframe_delta_until = timeframe_delta_until
-    self._clock_now = clock_now
-    self._components = components
-    self._state = ''
-    self._display_timeframe = display_timeframe
+    self._memory_component_name = memory_component_name
+    self._component_labels = dict(component_labels)
+
     self._prompt = prompt or (
-        'Summarize the observations above into one sentence '
-        f'about {self._agent_name}.'
+        'Summarize the observations above into one or two sentences.'
     )
+    self._display_timeframe = display_timeframe
 
-    self._verbose = verbose
-    self._history = []
+    self._logging_channel = logging_channel
 
-  def name(self) -> str:
-    return self._name
-
-  def state(self):
-    return self._state
-
-  def get_last_log(self):
-    if self._history:
-      return self._history[-1].copy()
-
-  def _log(self, entry: str):
-    print(termcolor.colored(entry, self._log_colour), end='')
-
-  def get_components(self) -> Sequence[component.Component]:
-    return self._components
-
-  def update(self):
+  def _make_pre_act_value(self) -> str:
+    agent_name = self.get_entity().name
     context = '\n'.join([
-        f"{self._agent_name}'s " + (comp.name() + ':\n' + comp.state())
-        for comp in self._components
+        f"{agent_name}'s"
+        f' {label}:\n{self.get_named_component_pre_act_value(key)}'
+        for key, label in self._component_labels.items()
     ])
 
     segment_start = self._clock_now() - self._timeframe_delta_from
     segment_end = self._clock_now() - self._timeframe_delta_until
 
-    mems = self._memory.retrieve_time_interval(
-        segment_start,
-        segment_end,
+    memory = self.get_entity().get_component(
+        self._memory_component_name,
+        type_=memory_component.MemoryComponent)
+    interval_scorer = legacy_associative_memory.RetrieveTimeInterval(
+        time_from=segment_start,
+        time_until=segment_end,
         add_time=True,
     )
+    mems = memory.retrieve(scoring_fn=interval_scorer)
 
     # removes memories that are not observations
-    mems = [mem for mem in mems if '[observation]' in mem]
+    mems = [mem.text for mem in mems if '[observation]' in mem.text]
 
     prompt = interactive_document.InteractiveDocument(self._model)
     prompt.statement(context + '\n')
     prompt.statement(
-        f'Recent observations of {self._agent_name}:\n' + f'{mems}\n'
+        f'Recent observations of {agent_name}:\n' + f'{mems}\n'
     )
-    self._state = (
-        self._agent_name
+    result = (
+        agent_name
         + ' '
         + prompt.open_question(
             self._prompt,
-            answer_prefix=f'{self._agent_name} ',
+            answer_prefix=f'{agent_name} ',
             max_tokens=1200,
         )
     )
@@ -203,15 +196,12 @@ class ObservationSummary(component.Component):
         interval = segment_start.strftime(
             '[%d %b %Y %H:%M:%S  '
         ) + segment_end.strftime('- %d %b %Y  %H:%M:%S]: ')
-      self._state = f'{interval} {self._state}'
+      result = f'{interval} {result}'
 
-    if self._verbose:
-      self._log(self._state)
-
-    update_log = {
-        'date': self._clock_now(),
-        'Summary': 'observation summary',
-        'State': self._state,
+    self._logging_channel({
+        'Key': self.get_pre_act_key(),
+        'Value': result,
         'Chain of thought': prompt.view().text().splitlines(),
-    }
-    self._history.append(update_log)
+    })
+
+    return result

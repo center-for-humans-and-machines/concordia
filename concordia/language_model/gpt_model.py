@@ -16,6 +16,7 @@
 """Language Model that uses OpenAI's GPT models."""
 
 import json
+import os
 from collections.abc import Collection, Sequence
 from typing import Optional
 
@@ -36,6 +37,8 @@ class GptLanguageModel(language_model.LanguageModel):
       self,
       client: openai.OpenAI,
       model_name: str,
+      *,
+      api_key: str | None = None,
       measurements: measurements_lib.Measurements | None = None,
       channel: str = language_model.DEFAULT_STATS_CHANNEL,
       request_logging_file: str = None,
@@ -43,12 +46,15 @@ class GptLanguageModel(language_model.LanguageModel):
     """Initializes the instance.
 
     Args:
-      api_key: The API key to use when accessing the OpenAI API.
       model_name: The language model to use. For more details, see
         https://platform.openai.com/docs/guides/text-generation/which-model-should-i-use.
+      api_key: The API key to use when accessing the OpenAI API. If None, will
+        use the OPENAI_API_KEY environment variable.
       measurements: The measurements object to log usage statistics to.
       channel: The channel to write the statistics to.
     """
+    if api_key is None:
+      api_key = os.environ['OPENAI_API_KEY']
     self._model_name = model_name
     self._measurements = measurements
     self._channel = channel

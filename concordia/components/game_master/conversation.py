@@ -23,7 +23,7 @@ from concordia.agents import basic_agent
 from concordia.associative_memory import associative_memory
 from concordia.associative_memory import blank_memories
 from concordia.clocks import game_clock
-from concordia.components import agent as sim_components
+from concordia.components.agent import to_be_deprecated as sim_components
 from concordia.document import interactive_document
 from concordia.environment import game_master
 from concordia.environment.scenes import conversation as conversation_scene
@@ -238,10 +238,11 @@ class Conversation(component.Component):
 
     return nonplayer_characters
 
-  def _generate_convo_summary(self, convo: list[str]):
+  def _generate_convo_summary(self, convo: Sequence[str]):
     summary = self._model.sample_text(
         '\n'.join(
-            convo + ['Summarize the conversation above in one sentence.'],
+            *convo,
+            'Summarize the conversation above in one sentence.',
         ),
         max_tokens=2000,
         terminators=(),

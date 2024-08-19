@@ -20,7 +20,7 @@ from concordia.agents import entity_agent_with_logging
 from concordia.associative_memory import associative_memory
 from concordia.associative_memory import formative_memories
 from concordia.clocks import game_clock
-from concordia.components.agent import v2 as components
+from concordia.components import agent as components
 from concordia.language_model import language_model
 from concordia.memory_bank import legacy_associative_memory
 from concordia.utils import measurements as measurements_lib
@@ -31,6 +31,7 @@ def _get_class_name(object_: object) -> str:
 
 
 def build_agent(
+    *,
     config: formative_memories.AgentConfig,
     model: language_model.LanguageModel,
     memory: associative_memory.AssociativeMemory,
@@ -110,23 +111,30 @@ def build_agent(
       f'\nQuestion: Which options are available to {agent_name} '
       'right now?\nAnswer')
   options_perception = (
-      components.options_perception.AvailableOptionsPerception(
+      components.question_of_recent_memories.AvailableOptionsPerception(
           model=model,
           components=options_perception_components,
           clock_now=clock.now,
           pre_act_key=options_perception_label,
           logging_channel=measurements.get_channel(
-              'AvailableOptionsPerception').on_next,
+              'AvailableOptionsPerception'
+          ).on_next,
       )
   )
   identity_label = '\nIdentity characteristics'
-  identity_characteristics = components.identity.IdentityWithoutPreAct(
-      model=model,
-      logging_channel=measurements.get_channel('IdentityWithoutPreAct').on_next,
+  identity_characteristics = (
+      components.question_of_query_associated_memories.IdentityWithoutPreAct(
+          model=model,
+          logging_channel=measurements.get_channel(
+              'IdentityWithoutPreAct'
+          ).on_next,
+          pre_act_key=identity_label,
+      )
   )
   self_perception_label = (
-      f'\nQuestion: What kind of person is {agent_name}?\nAnswer')
-  self_perception = components.self_perception.SelfPerception(
+      f'\nQuestion: What kind of person is {agent_name}?\nAnswer'
+  )
+  self_perception = components.question_of_recent_memories.SelfPerception(
       model=model,
       components={_get_class_name(identity_characteristics): identity_label},
       pre_act_key=self_perception_label,
@@ -136,7 +144,7 @@ def build_agent(
       f'\nQuestion: What kind of situation is {agent_name} in '
       'right now?\nAnswer')
   situation_perception = (
-      components.situation_perception.SituationPerception(
+      components.question_of_recent_memories.SituationPerception(
           model=model,
           components={
               _get_class_name(observation): observation_label,
@@ -146,21 +154,24 @@ def build_agent(
           clock_now=clock.now,
           pre_act_key=situation_perception_label,
           logging_channel=measurements.get_channel(
-              'SituationPerception').on_next,
+              'SituationPerception'
+          ).on_next,
       )
   )
   person_by_situation_label = (
       f'\nQuestion: What would a person like {agent_name} do in '
       'a situation like this?\nAnswer')
-  person_by_situation = components.person_by_situation.PersonBySituation(
-      model=model,
-      components={
-          _get_class_name(self_perception): self_perception_label,
-          _get_class_name(situation_perception): situation_perception_label,
-      },
-      clock_now=clock.now,
-      pre_act_key=person_by_situation_label,
-      logging_channel=measurements.get_channel('PersonBySituation').on_next,
+  person_by_situation = (
+      components.question_of_recent_memories.PersonBySituation(
+          model=model,
+          components={
+              _get_class_name(self_perception): self_perception_label,
+              _get_class_name(situation_perception): situation_perception_label,
+          },
+          clock_now=clock.now,
+          pre_act_key=person_by_situation_label,
+          logging_channel=measurements.get_channel('PersonBySituation').on_next,
+      )
   )
   reflection_label = '\nReflection'
   reflection = (

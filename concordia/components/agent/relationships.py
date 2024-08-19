@@ -12,114 +12,95 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Agent relationships with others component."""
 
-"""This construct track the status and location of players."""
+from collections.abc import Sequence
 
-from collections.abc import Callable, Sequence
-import datetime
-
-from concordia.associative_memory import associative_memory
+from concordia.components.agent import action_spec_ignored
+from concordia.components.agent import memory_component
 from concordia.document import interactive_document
 from concordia.language_model import language_model
-from concordia.typing import component
+from concordia.memory_bank import legacy_associative_memory
+from concordia.typing import logging
+from concordia.utils import concurrency
 
 
-class Relationships(component.Component):
-  """Tracks the status of players."""
+DEFAULT_PRE_ACT_KEY = 'Relationships with other agents'
+_ASSOCIATIVE_RETRIEVAL = legacy_associative_memory.RetrieveAssociative()
+
+
+class Relationships(action_spec_ignored.ActionSpecIgnored):
+  """Relationships component, which tracks the relationships between agents."""
 
   def __init__(
       self,
-      clock_now: Callable[[], datetime.datetime],
+      *,
       model: language_model.LanguageModel,
-      memory: associative_memory.AssociativeMemory,
-      agent_name: str,
-      other_agent_names: Sequence[str],
-      num_memories_to_retrieve: int = 10,
-      verbose: bool = False,
+      related_agents_names: Sequence[str],
+      memory_component_name: str = (
+          memory_component.DEFAULT_MEMORY_COMPONENT_NAME
+      ),
+      num_memories_to_retrieve: int = 25,
+      pre_act_key: str = DEFAULT_PRE_ACT_KEY,
+      logging_channel: logging.LoggingChannel = logging.NoOpLoggingChannel,
   ):
-    """Constructs a Relationships component.
+    """Initialize an identity component.
 
     Args:
-      clock_now: A function that returns the current time.
-      model: A language model.
-      memory: An associative memory.
-      agent_name: name of the focal agent.
-      other_agent_names: A list of agent names to track.
-      num_memories_to_retrieve: The number of memories to retrieve (max).
-      verbose: Whether to print the prompt to the console.
+      model: a language model
+      related_agents_names: the names of the agents to query for relationships
+      memory_component_name: The name of the memory component from which to
+        retrieve related memories.
+      num_memories_to_retrieve: how many related memories to retrieve per query
+      pre_act_key: Prefix to add to the output of the component when called in
+        `pre_act`.
+      logging_channel: The channel to use for debug logging.
     """
-    self._memory = memory
+    super().__init__(pre_act_key)
     self._model = model
-    self._state = ''
-    self._agent_name = agent_name
-    self._other_agent_names = other_agent_names
+    self._memory_component_name = memory_component_name
+
+    self._related_agents_names = related_agents_names
     self._num_memories_to_retrieve = num_memories_to_retrieve
-    self._partial_states = {name: '' for name in self._other_agent_names}
-    self._verbose = verbose
-    self._history = []
-    self._clock_now = clock_now
-    self._last_update = self._clock_now() - datetime.timedelta(days=365)
 
-  def name(self) -> str:
-    return 'relationships'
+    self._logging_channel = logging_channel
 
-  def state(self) -> str:
-    return self._state
+  def _query_memory(self, query: str) -> str:
+    agent_name = self.get_entity().name
+    memory = self.get_entity().get_component(
+        self._memory_component_name, type_=memory_component.MemoryComponent
+    )
+    name_with_query = f'{agent_name} and {query}'
+    mems = '\n'.join([
+        mem.text
+        for mem in memory.retrieve(
+            query=name_with_query,
+            scoring_fn=_ASSOCIATIVE_RETRIEVAL,
+            limit=self._num_memories_to_retrieve,
+        )
+    ])
+    prompt = interactive_document.InteractiveDocument(self._model)
+    question = (
+        'Given the above events, write a short summary of'
+        f' the relationships between {agent_name} and'
+        f' {query}. '
+    )
+    result = prompt.open_question(
+        '\n'.join([question, f'Statements:\n{mems}']),
+        max_tokens=1000,
+        answer_prefix=f'{agent_name} and {query} are ',
+    )
+    return result
 
-  def get_history(self):
-    return self._history.copy()
+  def _make_pre_act_value(self) -> str:
+    results = concurrency.map_parallel(
+        self._query_memory, self._related_agents_names
+    )
+    output = '\n'.join([
+        f'{query}: {result}'
+        for query, result in zip(self._related_agents_names, results)
+    ])
 
-  def get_last_log(self):
-    if self._history:
-      return self._history[-1].copy()
+    self._logging_channel({'Key': self.get_pre_act_key(), 'Value': output})
 
-  def partial_state(
-      self,
-      player_name: str,
-  ) -> str:
-    """Return a player-specific view of the construct's state."""
-    return self._partial_states[player_name]
-
-  def update(self) -> None:
-    if self._clock_now() == self._last_update:
-      return
-    self._last_update = self._clock_now()
-    new_state = ''
-    self._partial_states = {name: '' for name in self._other_agent_names}
-    per_player_prompt = {}
-    for player_name in self._other_agent_names:
-      memories = self._memory.retrieve_by_regex(player_name)
-      memories = memories[-self._num_memories_to_retrieve :]
-      prompt = interactive_document.InteractiveDocument(self._model)
-      prompt.statement('Events:\n' + '\n'.join(memories) + '\n')
-      time_now = self._clock_now().strftime('[%d %b %Y %H:%M:%S]')
-      prompt.statement(f'The current time is: {time_now}\n')
-      relationship = (
-          prompt.open_question(
-              'Given the above events and their time, write a short summary of'
-              f' the relationships between {self._agent_name} and'
-              f' {player_name}. ',
-              answer_prefix=f'{self._agent_name} and {player_name} are ',
-          )
-          + '\n'
-      )
-      per_player_prompt[player_name] = prompt.view().text().splitlines()
-      if self._verbose:
-        print(prompt.view().text())
-
-      # Indent player status outputs.
-      player_state_string = (
-          f'{self._agent_name} and {player_name} are ' + relationship
-      )
-      self._partial_states[player_name] = player_state_string
-      new_state = new_state + player_state_string
-
-    self._state = new_state
-
-    update_log = {
-        'date': self._clock_now(),
-        'state': self._state,
-        'partial states': self._partial_states,
-        'per player prompts': per_player_prompt,
-    }
-    self._history.append(update_log)
+    return output
