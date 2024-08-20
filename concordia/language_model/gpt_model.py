@@ -53,8 +53,6 @@ class GptLanguageModel(language_model.LanguageModel):
       measurements: The measurements object to log usage statistics to.
       channel: The channel to write the statistics to.
     """
-    if api_key is None:
-      api_key = os.environ['OPENAI_API_KEY']
     self._model_name = model_name
     self._measurements = measurements
     self._channel = channel
