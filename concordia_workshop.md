@@ -51,7 +51,15 @@ style: |
 `https://github.com/center-for-humans-and-machines/concordia/installation_instructions.md`
 
 ---
+### Notes about Concordia and GPT-models
+* Concordia sends **a lot** of requests to the GPT API.
+  + I've set all notebooks for today to use `gpt-4o-mini` for today so we do not have to worry about incurred costs.
+  + However, `gpt-4o-mini` is less smart than `gpt-4o`. So you may also try changing to `gpt-4o`.
+* I provide `model.stats` and `model.compute_costs()` to track your incurred costs.
+
+---
+
 ### Group work
 1. Work through `agent_basic_tutorial` and `agent_components_tutorial` in `examples/tutorial` (5-15 minutes)
-2. Check the outputs in my notebook `examples/lets_get_lunch.ipynb` to get an understanding of how a full system works (No need to execute cells yet).
+2. Check the outputs in my notebook `examples/lets_get_lunch.ipynb` to get an understanding of how a full system works
 3. Bootstrap from the notebook to create your own scenarios and play around with components to run your own agent-based simulations.
