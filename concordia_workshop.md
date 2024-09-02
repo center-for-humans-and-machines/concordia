@@ -12,7 +12,7 @@ style: |
 ---
 ### Concordia Workshop
 1. What are Generative Agent-Based Models and what is Concordia (5-10 minutes)
-2. Group Formation and installation instructions (ca. 5 minutes)
+2. Group Formation and installation instructions (ca. 10 minutes)
 3. Work through tutorial notebooks in small groups (5-15 minutes)
 4. Create own Agent-Based Models in small groups (rest of workshop)
 
@@ -20,7 +20,7 @@ style: |
 
 ## Agent-Based Models (ABM)
 * ABMs are stochastic simulations to study interactions between agents
-* Agents are treated as individuals with certain traits / attributes.
+* Agents are treated as individuals with certain traits / attributes. ("They implement and *act* function")
 
 ---
 
@@ -63,3 +63,4 @@ style: |
 1. Work through `agent_basic_tutorial` and `agent_components_tutorial` in `examples/tutorial` (5-15 minutes)
 2. Check the outputs in my notebook `examples/lets_get_lunch.ipynb` to get an understanding of how a full system works
 3. Bootstrap from the notebook to create your own scenarios and play around with components to run your own agent-based simulations.
+4. 12am: Present results and short discussion.
